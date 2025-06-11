@@ -118,9 +118,13 @@ $container->set('helper', function ($c) {
         }
 
         public function get_session_user() {
-            return $_SESSION['user'] ?? null;
+            if (isset($_SESSION['user'], $_SESSION['user']['id'])) {
+                return $_SESSION['user'] ?? $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $_SESSION['user']['id']) ?? null;
+            } else {
+                return null;
+            }
         }
-        
+
         public function make_posts(array $results, $options = []) {
             $options += ['all_comments' => false];
             $all_comments = $options['all_comments'];

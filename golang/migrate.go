@@ -34,7 +34,7 @@ func main() {
 	// 環境変数などで設定される接続情報を使う例
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local",
 		getEnv("ISUCONP_DB_USER", "root"),
-		getEnv("ISUCONP_DB_PASSWORD", ""),
+		getEnv("ISUCONP_DB_PASSWORD", "root"),
 		getEnv("ISUCONP_DB_HOST", "localhost"),
 		getEnv("ISUCONP_DB_PORT", "3306"),
 		getEnv("ISUCONP_DB_NAME", "isuconp"),

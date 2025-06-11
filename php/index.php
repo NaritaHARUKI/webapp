@@ -44,8 +44,8 @@ $container->set('settings', function() {
         'db' => [
             'host' => $_SERVER['ISUCONP_DB_HOST'] ?? 'localhost',
             'port' => $_SERVER['ISUCONP_DB_PORT'] ?? 3306,
-            'username' => $_SERVER['ISUCONP_DB_USER'] ?? 'root',
-            'password' => $_SERVER['ISUCONP_DB_PASSWORD'] ?? null,
+            'username' => $_SERVER['ISUCONP_DB_USER'] ?? 'isuconp',
+            'password' => $_SERVER['ISUCONP_DB_PASSWORD'] ?? 'isuconp',
             'database' => $_SERVER['ISUCONP_DB_NAME'] ?? 'isuconp',
         ],
     ];
@@ -148,7 +148,6 @@ $container->set('helper', function ($c) {
 
             // 2. 投稿のコメントを一括取得
             $comments_by_post = [];
-            $comment_user_ids = [];
             $comment_query = "SELECT * FROM comments WHERE post_id IN ({$placeholder}) ORDER BY created_at DESC";
             $ps = $this->db()->prepare($comment_query);
             $ps->execute($post_ids);
@@ -197,7 +196,6 @@ $container->set('helper', function ($c) {
             }
             return $posts;
         }
-
     };
 });
 

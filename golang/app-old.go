@@ -74,6 +74,14 @@ func init() {
 	memcacheClient := memcache.New(memdAddr)
 	store = gsm.NewMemcacheStore(memcacheClient, "iscogram_", []byte("sendagaya"))
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+
+	logFile, err := os.OpenFile("app.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0666)
+    if err != nil {
+        log.Fatalf("ログファイルのオープンに失敗しました: %v", err)
+    }
+    log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+    log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	log.Println("log initialized")
 }
 
 func dbInitialize() {
@@ -175,7 +183,7 @@ func getSessionUser(r http.Request) User {
     }
 
     return u
-}i
+}
 
 func getFlash(w http.ResponseWriter, r *http.Request, key string) string {
 	session := getSession(r)
@@ -469,22 +477,30 @@ func getLogout(w http.ResponseWriter, r *http.Request) {
 func getIndex(w http.ResponseWriter, r *http.Request) {
 	me := getSessionUser(r)
 
-	posts, err := fetchPosts("SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC", getCSRFToken(r), false)
+	results := []Post{}
+
+	err := db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC")
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
-	tmpl := template.Must(template.New("layout.html").Funcs(template.FuncMap{
+	posts, err := makePosts(results, getCSRFToken(r), false)
+	if err != nil {
+		log.Print(err)
+		return
+	}
+
+	fmap := template.FuncMap{
 		"imageURL": imageURL,
-	}).ParseFiles(
+	}
+
+	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
 		getTemplPath("layout.html"),
 		getTemplPath("index.html"),
 		getTemplPath("posts.html"),
 		getTemplPath("post.html"),
-	))
-
-	tmpl.Execute(w, struct {
+	)).Execute(w, struct {
 		Posts     []Post
 		Me        User
 		CSRFToken string
@@ -495,38 +511,80 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 func getAccountName(w http.ResponseWriter, r *http.Request) {
 	accountName := r.PathValue("accountName")
 	user := User{}
+
 	err := db.Get(&user, "SELECT * FROM `users` WHERE `account_name` = ? AND `del_flg` = 0", accountName)
 	if err != nil {
 		log.Print(err)
 		return
 	}
+
 	if user.ID == 0 {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	posts, err := fetchPosts("SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC", getCSRFToken(r), false, user.ID)
+	results := []Post{}
+
+	err = db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC", user.ID)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
-	commentCount, postCount, commentedCount, err := fetchUserStats(user.ID)
+	posts, err := makePosts(results, getCSRFToken(r), false)
 	if err != nil {
 		log.Print(err)
 		return
+	}
+
+	commentCount := 0
+	err = db.Get(&commentCount, "SELECT COUNT(*) AS count FROM `comments` WHERE `user_id` = ?", user.ID)
+	if err != nil {
+		log.Print(err)
+		return
+	}
+
+	postIDs := []int{}
+	err = db.Select(&postIDs, "SELECT `id` FROM `posts` WHERE `user_id` = ?", user.ID)
+	if err != nil {
+		log.Print(err)
+		return
+	}
+	postCount := len(postIDs)
+
+	commentedCount := 0
+	if postCount > 0 {
+		s := []string{}
+		for range postIDs {
+			s = append(s, "?")
+		}
+		placeholder := strings.Join(s, ", ")
+
+		// convert []int -> []interface{}
+		args := make([]interface{}, len(postIDs))
+		for i, v := range postIDs {
+			args[i] = v
+		}
+
+		err = db.Get(&commentedCount, "SELECT COUNT(*) AS count FROM `comments` WHERE `post_id` IN ("+placeholder+")", args...)
+		if err != nil {
+			log.Print(err)
+			return
+		}
 	}
 
 	me := getSessionUser(r)
-	tmpl := template.Must(template.New("layout.html").Funcs(template.FuncMap{
+
+	fmap := template.FuncMap{
 		"imageURL": imageURL,
-	}).ParseFiles(
+	}
+
+	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
 		getTemplPath("layout.html"),
 		getTemplPath("user.html"),
 		getTemplPath("posts.html"),
 		getTemplPath("post.html"),
-	))
-	tmpl.Execute(w, struct {
+	)).Execute(w, struct {
 		Posts          []Post
 		User           User
 		PostCount      int
@@ -547,29 +605,39 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 	if maxCreatedAt == "" {
 		return
 	}
+
 	t, err := time.Parse(ISO8601Format, maxCreatedAt)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
-	query := "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC"
-	posts, err := fetchPosts(query, getCSRFToken(r), false, t.Format(ISO8601Format))
+	results := []Post{}
+	err = db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC", t.Format(ISO8601Format))
 	if err != nil {
 		log.Print(err)
 		return
 	}
+
+	posts, err := makePosts(results, getCSRFToken(r), false)
+	if err != nil {
+		log.Print(err)
+		return
+	}
+
 	if len(posts) == 0 {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	tmpl := template.Must(template.New("posts.html").Funcs(template.FuncMap{
+
+	fmap := template.FuncMap{
 		"imageURL": imageURL,
-	}).ParseFiles(
+	}
+
+	template.Must(template.New("posts.html").Funcs(fmap).ParseFiles(
 		getTemplPath("posts.html"),
 		getTemplPath("post.html"),
-	))
-	tmpl.Execute(w, posts)
+	)).Execute(w, posts)
 }
 
 func getPostsID(w http.ResponseWriter, r *http.Request) {
@@ -579,63 +647,41 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	query := "SELECT * FROM `posts` WHERE `id` = ?"
-	posts, err := fetchPosts(query, getCSRFToken(r), true, pid)
+
+	results := []Post{}
+	err = db.Select(&results, "SELECT * FROM `posts` WHERE `id` = ?", pid)
 	if err != nil {
 		log.Print(err)
 		return
 	}
+
+	posts, err := makePosts(results, getCSRFToken(r), true)
+	if err != nil {
+		log.Print(err)
+		return
+	}
+
 	if len(posts) == 0 {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
+
 	p := posts[0]
+
 	me := getSessionUser(r)
-	tmpl := template.Must(template.New("layout.html").Funcs(template.FuncMap{
+
+	fmap := template.FuncMap{
 		"imageURL": imageURL,
-	}).ParseFiles(
+	}
+
+	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
 		getTemplPath("layout.html"),
 		getTemplPath("post_id.html"),
 		getTemplPath("post.html"),
-	))
-	tmpl.Execute(w, struct {
+	)).Execute(w, struct {
 		Post Post
 		Me   User
 	}{p, me})
-}
-
-func fetchPosts(query string, csrfToken string, all bool, args ...interface{}) ([]Post, error) {
-	results := []Post{}
-	err := db.Select(&results, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	return makePosts(results, csrfToken, all)
-}
-
-func fetchUserStats(userID int) (commentCount, postCount, commentedCount int, err error) {
-	err = db.Get(&commentCount, "SELECT COUNT(*) FROM `comments` WHERE `user_id` = ?", userID)
-	if err != nil {
-		return
-	}
-	postIDs := []int{}
-	err = db.Select(&postIDs, "SELECT `id` FROM `posts` WHERE `user_id` = ?", userID)
-	if err != nil {
-		return
-	}
-	postCount = len(postIDs)
-	if postCount == 0 {
-		return
-	}
-	s := make([]string, len(postIDs))
-	args := make([]interface{}, len(postIDs))
-	for i, v := range postIDs {
-		s[i] = "?"
-		args[i] = v
-	}
-	placeholder := strings.Join(s, ", ")
-	err = db.Get(&commentedCount, "SELECT COUNT(*) FROM `comments` WHERE `post_id` IN ("+placeholder+")", args...)
-	return
 }
 
 func postIndex(w http.ResponseWriter, r *http.Request) {
@@ -708,6 +754,31 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	outputDir := "/home/public/images"
+	// postsの画像はすべて/home/public/imagesに保存する
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		log.Printf("ディレクトリの作成に失敗しました: %v", err)
+		return
+	}
+	ext := ""
+	if mime == "image/jpeg" {
+		ext = ".jpg"
+	} else if mime == "image/png" {
+		ext = ".png"
+	} else if mime == "image/gif" {
+		ext = ".gif"
+	} else {
+		log.Printf("不明なMIMEタイプ: %s", mime)
+		return
+	}
+	filename := fmt.Sprintf("%d%s", result.LastInsertId(), ext)
+	path := path.Join(outputDir, filename)
+	if err := os.WriteFile(path, filedata, 0644); err != nil {
+		log.Printf("画像の書き込みに失敗しました: %v", err)
+		return
+	}
+
+
 	pid, err := result.LastInsertId()
 	if err != nil {
 		log.Print(err)
@@ -716,6 +787,7 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 
 	http.Redirect(w, r, "/posts/"+strconv.FormatInt(pid, 10), http.StatusFound)
 }
+
 
 func getImage(w http.ResponseWriter, r *http.Request) {
 	pidStr := r.PathValue("id")

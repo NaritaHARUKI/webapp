@@ -1,20 +1,20 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
 
+	"github.com/jmoiron/sqlx"
 	_ "github.com/go-sql-driver/mysql"
 )
 
 type Post struct {
-	ID      int
-	Mime    string
-	Imgdata []byte
+	ID      int    `db:"id"`
+	Mime    string `db:"mime"`
+	Imgdata []byte `db:"imgdata"`
 }
 
 func mimeToExt(mime string) string {
@@ -31,7 +31,6 @@ func mimeToExt(mime string) string {
 }
 
 func main() {
-	// 環境変数などで設定される接続情報を使う例
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local",
 		getEnv("ISUCONP_DB_USER", "root"),
 		getEnv("ISUCONP_DB_PASSWORD", "root"),
@@ -40,17 +39,17 @@ func main() {
 		getEnv("ISUCONP_DB_NAME", "isuconp"),
 	)
 
-	db, err := sql.Open("mysql", dsn)
+	db, err := sqlx.Open("mysql", dsn)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("DB接続失敗: %v", err)
 	}
 	defer db.Close()
 
-	rows, err := db.Query("SELECT id, mime, imgdata FROM posts")
+	var posts []Post
+	err = db.Select(&posts, "SELECT id, mime, imgdata FROM posts")
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("DBクエリ失敗: %v", err)
 	}
-	defer rows.Close()
 
 	outputDir := "/home/public/images"
 	err = os.MkdirAll(outputDir, 0755)
@@ -59,14 +58,7 @@ func main() {
 	}
 
 	count := 0
-	for rows.Next() {
-		var p Post
-		err := rows.Scan(&p.ID, &p.Mime, &p.Imgdata)
-		if err != nil {
-			log.Print("行読み込みエラー: ", err)
-			continue
-		}
-
+	for _, p := range posts {
 		ext := mimeToExt(p.Mime)
 		if ext == "" {
 			log.Printf("対応していない MIME タイプ: %s", p.Mime)

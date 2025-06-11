@@ -2,7 +2,6 @@ package main
 
 import (
 	crand "crypto/rand"
-	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
@@ -26,9 +25,8 @@ import (
 )
 
 var (
-	db            *sqlx.DB
-	store         *gsm.MemcacheStore
-	memcacheClient *memcache.Client
+	db    *sqlx.DB
+	store *gsm.MemcacheStore
 )
 
 const (
@@ -73,7 +71,7 @@ func init() {
 	if memdAddr == "" {
 		memdAddr = "localhost:11211"
 	}
-	memcacheClient = memcache.New(memdAddr)
+	memcacheClient := memcache.New(memdAddr)
 	store = gsm.NewMemcacheStore(memcacheClient, "iscogram_", []byte("sendagaya"))
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 }
@@ -143,7 +141,7 @@ func getSession(r *http.Request) *sessions.Session {
 	return session
 }
 
-func getSessionUser(r *http.Request) User {
+func getSessionUser(r http.Request) User {
     session := getSession(r)
     uid, ok := session.Values["userid"]
     if !ok || uid == nil {
@@ -162,7 +160,7 @@ func getSessionUser(r *http.Request) User {
 
     // キャッシュミスまたはパース失敗時
     u := User{}
-    err = db.Get(&u, "SELECT * FROM users WHERE id = ?", uid)
+    err = db.Get(&u, "SELECT FROM users WHERE id = ?", uid)
     if err != nil {
         return User{}
     }
@@ -297,7 +295,9 @@ func makePosts(results []Post, csrfToken string, allComments bool) ([]Post, erro
         p.User = userMap[p.UserID]
         p.CSRFToken = csrfToken
 
-        posts = append(posts, p)
+        if p.User.DelFlg == 0 {
+            posts = append(posts, p)
+        }
         if len(posts) >= postsPerPage {
             break
         }
@@ -373,20 +373,11 @@ func postLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accountName := r.FormValue("account_name")
-	password := r.FormValue("password")
-
-	// 空の値の場合は422を返す
-	if accountName == "" || password == "" {
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		return
-	}
-
-	u := tryLogin(accountName, password)
+	u := tryLogin(r.FormValue("account_name"), r.FormValue("password"))
 
 	if u != nil {
 		session := getSession(r)
-		session.Values["userid"] = u.ID
+		session.Values["user_id"] = u.ID
 		session.Values["csrf_token"] = secureRandomStr(16)
 		session.Save(r, w)
 
@@ -459,7 +450,7 @@ func postRegister(w http.ResponseWriter, r *http.Request) {
 		log.Print(err)
 		return
 	}
-	session.Values["userid"] = uid
+	session.Values["user_id"] = uid
 	session.Values["csrf_token"] = secureRandomStr(16)
 	session.Save(r, w)
 
@@ -468,19 +459,38 @@ func postRegister(w http.ResponseWriter, r *http.Request) {
 
 func getLogout(w http.ResponseWriter, r *http.Request) {
 	session := getSession(r)
-	delete(session.Values, "userid")
+	delete(session.Values, "user_id")
 	session.Options = &sessions.Options{MaxAge: -1}
 	session.Save(r, w)
 
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+var (
+	indexTmpl *template.Template
+	indexOnce sync.Once
+)
+
+func loadIndexTemplate() {
+	fmap := template.FuncMap{
+		"imageURL": imageURL,
+	}
+
+	indexTmpl = template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("index.html"),
+		getTemplPath("posts.html"),
+		getTemplPath("post.html"),
+	))
+}
+
+
 func getIndex(w http.ResponseWriter, r *http.Request) {
 	me := getSessionUser(r)
 
 	results := []Post{}
 
-	err := db.Select(&results, "SELECT p.`id`, p.`user_id`, p.`body`, p.`mime`, p.`created_at` FROM `posts` p JOIN `users` u ON p.user_id = u.id WHERE u.del_flg = 0 ORDER BY p.`created_at` DESC LIMIT ?", postsPerPage)
+	err := db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC")
 	if err != nil {
 		log.Print(err)
 		return
@@ -492,21 +502,30 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
+	indexOnce.Do(loadIndexTemplate)
 
-	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("index.html"),
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, struct {
+	indexTmpl.Execute(w, struct {
 		Posts     []Post
 		Me        User
 		CSRFToken string
 		Flash     string
 	}{posts, me, getCSRFToken(r), getFlash(w, r, "notice")})
+
+	fmap := template.FuncMap{
+		"imageURL": imageURL,
+	}
+
+	// template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
+	// 	getTemplPath("layout.html"),
+	// 	getTemplPath("index.html"),
+	// 	getTemplPath("posts.html"),
+	// 	getTemplPath("post.html"),
+	// )).Execute(w, struct {
+	// 	Posts     []Post
+	// 	Me        User
+	// 	CSRFToken string
+	// 	Flash     string
+	// }{posts, me, getCSRFToken(r), getFlash(w, r, "notice")})
 }
 
 func getAccountName(w http.ResponseWriter, r *http.Request) {
@@ -526,7 +545,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 
 	results := []Post{}
 
-	err = db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC LIMIT ?", user.ID, postsPerPage)
+	err = db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC", user.ID)
 	if err != nil {
 		log.Print(err)
 		return
@@ -614,7 +633,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := []Post{}
-	err = db.Select(&results, "SELECT p.`id`, p.`user_id`, p.`body`, p.`mime`, p.`created_at` FROM `posts` p JOIN `users` u ON p.user_id = u.id WHERE u.del_flg = 0 AND p.`created_at` <= ? ORDER BY p.`created_at` DESC LIMIT ?", t.Format(ISO8601Format), postsPerPage)
+	err = db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC", t.Format(ISO8601Format))
 	if err != nil {
 		log.Print(err)
 		return
@@ -785,8 +804,6 @@ func getImage(w http.ResponseWriter, r *http.Request) {
 		ext == "png" && post.Mime == "image/png" ||
 		ext == "gif" && post.Mime == "image/gif" {
 		w.Header().Set("Content-Type", post.Mime)
-		w.Header().Set("Cache-Control", "public, max-age=86400") // 24時間キャッシュ
-		w.Header().Set("Expires", time.Now().Add(24*time.Hour).Format(http.TimeFormat))
 		_, err := w.Write(post.Imgdata)
 		if err != nil {
 			log.Print(err)
@@ -924,11 +941,6 @@ func main() {
 		log.Fatalf("Failed to connect to DB: %s.", err.Error())
 	}
 	defer db.Close()
-
-	// データベース接続プールの最適化
-	db.SetMaxOpenConns(100)
-	db.SetMaxIdleConns(25)
-	db.SetConnMaxLifetime(time.Hour)
 
 	r := chi.NewRouter()
 

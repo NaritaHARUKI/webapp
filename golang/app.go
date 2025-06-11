@@ -511,9 +511,9 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		Flash     string
 	}{posts, me, getCSRFToken(r), getFlash(w, r, "notice")})
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
+	// fmap := template.FuncMap{
+	// 	"imageURL": imageURL,
+	// }
 
 	// template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
 	// 	getTemplPath("layout.html"),

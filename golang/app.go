@@ -677,82 +677,95 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 }
 
 func postIndex(w http.ResponseWriter, r *http.Request) {
-	me := getSessionUser(r)
-	if !isLogin(me) {
-		http.Redirect(w, r, "/login", http.StatusFound)
-		return
-	}
+    me := getSessionUser(r)
+    if !isLogin(me) {
+        http.Redirect(w, r, "/login", http.StatusFound)
+        return
+    }
 
-	if r.FormValue("csrf_token") != getCSRFToken(r) {
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		return
-	}
+    if r.FormValue("csrf_token") != getCSRFToken(r) {
+        w.WriteHeader(http.StatusUnprocessableEntity)
+        return
+    }
 
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		session := getSession(r)
-		session.Values["notice"] = "画像が必須です"
-		session.Save(r, w)
+    file, header, err := r.FormFile("file")
+    if err != nil {
+        session := getSession(r)
+        session.Values["notice"] = "画像が必須です"
+        session.Save(r, w)
 
-		http.Redirect(w, r, "/", http.StatusFound)
-		return
-	}
+        http.Redirect(w, r, "/", http.StatusFound)
+        return
+    }
+    defer file.Close()
 
-	mime := ""
-	if file != nil {
-		// 投稿のContent-Typeからファイルのタイプを決定する
-		contentType := header.Header["Content-Type"][0]
-		if strings.Contains(contentType, "jpeg") {
-			mime = "image/jpeg"
-		} else if strings.Contains(contentType, "png") {
-			mime = "image/png"
-		} else if strings.Contains(contentType, "gif") {
-			mime = "image/gif"
-		} else {
-			session := getSession(r)
-			session.Values["notice"] = "投稿できる画像形式はjpgとpngとgifだけです"
-			session.Save(r, w)
+    contentType := header.Header.Get("Content-Type")
+    var ext string
+    if strings.Contains(contentType, "jpeg") {
+        ext = ".jpg"
+    } else if strings.Contains(contentType, "png") {
+        ext = ".png"
+    } else if strings.Contains(contentType, "gif") {
+        ext = ".gif"
+    } else {
+        session := getSession(r)
+        session.Values["notice"] = "投稿できる画像形式はjpgとpngとgifだけです"
+        session.Save(r, w)
 
-			http.Redirect(w, r, "/", http.StatusFound)
-			return
-		}
-	}
+        http.Redirect(w, r, "/", http.StatusFound)
+        return
+    }
 
-	filedata, err := io.ReadAll(file)
-	if err != nil {
-		log.Print(err)
-		return
-	}
+    // ファイルサイズチェック
+    filedata, err := io.ReadAll(file)
+    if err != nil {
+        log.Print(err)
+        return
+    }
+    if len(filedata) > UploadLimit {
+        session := getSession(r)
+        session.Values["notice"] = "ファイルサイズが大きすぎます"
+        session.Save(r, w)
 
-	if len(filedata) > UploadLimit {
-		session := getSession(r)
-		session.Values["notice"] = "ファイルサイズが大きすぎます"
-		session.Save(r, w)
+        http.Redirect(w, r, "/", http.StatusFound)
+        return
+    }
 
-		http.Redirect(w, r, "/", http.StatusFound)
-		return
-	}
+    // 画像保存ディレクトリ
+    saveDir := "/home/public/images"
+    if _, err := os.Stat(saveDir); os.IsNotExist(err) {
+        if err := os.MkdirAll(saveDir, 0755); err != nil {
+            log.Print("画像保存ディレクトリ作成失敗:", err)
+            return
+        }
+    }
 
-	query := "INSERT INTO `posts` (`user_id`, `mime`, `imgdata`, `body`) VALUES (?,?,?,?)"
-	result, err := db.Exec(
-		query,
-		me.ID,
-		mime,
-		filedata,
-		r.FormValue("body"),
-	)
-	if err != nil {
-		log.Print(err)
-		return
-	}
+    // ユニークなファイル名生成
+    filename := uuid.New().String() + ext
+    savePath := filepath.Join(saveDir, filename)
 
-	pid, err := result.LastInsertId()
-	if err != nil {
-		log.Print(err)
-		return
-	}
+    // ファイル書き込み
+    if err := os.WriteFile(savePath, filedata, 0644); err != nil {
+        log.Print("画像保存失敗:", err)
+        return
+    }
 
-	http.Redirect(w, r, "/posts/"+strconv.FormatInt(pid, 10), http.StatusFound)
+    // DBにはmimeとファイル名（パス）を保存
+    query := "INSERT INTO `posts` (`user_id`, `mime`, `imgdata`, `body`) VALUES (?,?,?,?)"
+    // imgdataはファイル名に置き換え
+    result, err := db.Exec(query, me.ID, contentType, filename, r.FormValue("body"))
+    if err != nil {
+        log.Print(err)
+        return
+    }
+
+    pid, err := result.LastInsertId()
+    if err != nil {
+        log.Print(err)
+        return
+    }
+
+    http.Redirect(w, r, "/posts/"+strconv.FormatInt(pid, 10), http.StatusFound)
 }
 
 func getImage(w http.ResponseWriter, r *http.Request) {

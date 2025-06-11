@@ -761,6 +761,8 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("画像を保存しました: %s", savePath)
+
 	// ファイル名をimgdataに更新
 	_, err = db.Exec("UPDATE `posts` SET `imgdata` = ? WHERE `id` = ?", filename, pid)
 	if err != nil {

@@ -74,6 +74,14 @@ func init() {
 	memcacheClient := memcache.New(memdAddr)
 	store = gsm.NewMemcacheStore(memcacheClient, "iscogram_", []byte("sendagaya"))
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+
+	logFile, err := os.OpenFile("app.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0666)
+    if err != nil {
+        log.Fatalf("ログファイルのオープンに失敗しました: %v", err)
+    }
+    log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+    log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	log.Println("log initialized")
 }
 
 func dbInitialize() {

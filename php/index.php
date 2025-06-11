@@ -118,13 +118,9 @@ $container->set('helper', function ($c) {
         }
 
         public function get_session_user() {
-            if (isset($_SESSION['user'], $_SESSION['user']['id'])) {
-                return $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $_SESSION['user']['id']);
-            } else {
-                return null;
-            }
+            return $_SESSION['user'] ?? null;
         }
-
+        
         public function make_posts(array $results, $options = []) {
             $options += ['all_comments' => false];
             $all_comments = $options['all_comments'];
@@ -196,6 +192,7 @@ $container->set('helper', function ($c) {
             }
             return $posts;
         }
+
     };
 });
 
@@ -268,13 +265,16 @@ $app->post('/login', function (Request $request, Response $response) {
         return redirect($response, '/', 302);
     }
 
-    $db = $this->get('db');
     $params = $request->getParsedBody();
     $user = $this->get('helper')->try_login($params['account_name'], $params['password']);
 
     if ($user) {
         $_SESSION['user'] = [
-          'id' => $user['id'],
+            'id' => $user['id'],
+            'account_name' => $user['account_name'],
+            'authority' => $user['authority'],
+            'del_flg' => $user['del_flg'],
+            'created_at' => $user['created_at'],
         ];
         return redirect($response, '/', 302);
     } else {
@@ -282,6 +282,7 @@ $app->post('/login', function (Request $request, Response $response) {
         return redirect($response, '/login', 302);
     }
 });
+
 
 $app->get('/register', function (Request $request, Response $response) {
     if ($this->get('helper')->get_session_user() !== null) {

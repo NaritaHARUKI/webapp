@@ -466,6 +466,25 @@ func getLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+var (
+	indexTmpl *template.Template
+	indexOnce sync.Once
+)
+
+func loadIndexTemplate() {
+	fmap := template.FuncMap{
+		"imageURL": imageURL,
+	}
+
+	indexTmpl = template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("index.html"),
+		getTemplPath("posts.html"),
+		getTemplPath("post.html"),
+	))
+}
+
+
 func getIndex(w http.ResponseWriter, r *http.Request) {
 	me := getSessionUser(r)
 
@@ -483,21 +502,30 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
+	indexOnce.Do(loadIndexTemplate)
 
-	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("index.html"),
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, struct {
+	indexTmpl.Execute(w, struct {
 		Posts     []Post
 		Me        User
 		CSRFToken string
 		Flash     string
 	}{posts, me, getCSRFToken(r), getFlash(w, r, "notice")})
+
+	fmap := template.FuncMap{
+		"imageURL": imageURL,
+	}
+
+	// template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
+	// 	getTemplPath("layout.html"),
+	// 	getTemplPath("index.html"),
+	// 	getTemplPath("posts.html"),
+	// 	getTemplPath("post.html"),
+	// )).Execute(w, struct {
+	// 	Posts     []Post
+	// 	Me        User
+	// 	CSRFToken string
+	// 	Flash     string
+	// }{posts, me, getCSRFToken(r), getFlash(w, r, "notice")})
 }
 
 func getAccountName(w http.ResponseWriter, r *http.Request) {

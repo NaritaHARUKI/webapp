@@ -131,6 +131,10 @@ $container->set('helper', function ($c) {
 
             $posts = [];
             foreach ($results as $post) {
+                if (count($posts) >= POSTS_PER_PAGE) {
+                    break;
+                }
+
                 $post['comment_count'] = $this->fetch_first('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', $post['id'])['count'];
                 $query = 'SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC';
                 if (!$all_comments) {
@@ -149,9 +153,6 @@ $container->set('helper', function ($c) {
                 $post['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $post['user_id']);
                 if ($post['user']['del_flg'] == 0) {
                     $posts[] = $post;
-                }
-                if (count($posts) >= POSTS_PER_PAGE) {
-                    break;
                 }
             }
             return $posts;

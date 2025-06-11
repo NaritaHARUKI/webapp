@@ -129,66 +129,25 @@ $container->set('helper', function ($c) {
             $options += ['all_comments' => false];
             $all_comments = $options['all_comments'];
 
-            if (empty($results)) {
-                return [];
-            }
-
             $posts = [];
-            $post_ids = array_column($results, 'id');
-            $user_ids = array_unique(array_column($results, 'user_id'));
-
-            // 1. 投稿のコメント数を一括取得
-            $placeholder = implode(',', array_fill(0, count($post_ids), '?'));
-            $comment_counts = [];
-            $ps = $this->db()->prepare("SELECT post_id, COUNT(*) as count FROM comments WHERE post_id IN ({$placeholder}) GROUP BY post_id");
-            $ps->execute($post_ids);
-            foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $row) {
-                $comment_counts[$row['post_id']] = $row['count'];
-            }
-
-            // 2. 投稿のコメントを一括取得
-            $comments_by_post = [];
-            $comment_user_ids = [];
-            $comment_query = "SELECT * FROM comments WHERE post_id IN ({$placeholder}) ORDER BY created_at DESC";
-            $ps = $this->db()->prepare($comment_query);
-            $ps->execute($post_ids);
-            foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $comment) {
-                $comments_by_post[$comment['post_id']][] = $comment;
-                $user_ids[] = $comment['user_id'];
-            }
-
-            // 3. 全ユーザー情報を一括取得
-            $user_ids = array_unique($user_ids);
-            $users = [];
-            if (!empty($user_ids)) {
-                $user_placeholder = implode(',', array_fill(0, count($user_ids), '?'));
-                $ps = $this->db()->prepare("SELECT * FROM users WHERE id IN ({$user_placeholder})");
-                $ps->execute($user_ids);
-                foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $user) {
-                    $users[$user['id']] = $user;
-                }
-            }
-
-            // 4. データを組み立て
             foreach ($results as $post) {
-                $post['comment_count'] = $comment_counts[$post['id']] ?? 0;
-                
-                // コメントの組み立て
-                $post_comments = $comments_by_post[$post['id']] ?? [];
-                if (!$all_comments && count($post_comments) > 3) {
-                    $post_comments = array_slice($post_comments, 0, 3);
+                $post['comment_count'] = $this->fetch_first('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', $post['id'])['count'];
+                $query = 'SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC';
+                if (!$all_comments) {
+                    $query .= ' LIMIT 3';
                 }
-                
-                // コメントにユーザー情報を追加
-                foreach ($post_comments as &$comment) {
-                    $comment['user'] = $users[$comment['user_id']] ?? null;
+
+                $ps = $this->db()->prepare($query);
+                $ps->execute([$post['id']]);
+                $comments = $ps->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($comments as &$comment) {
+                    $comment['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $comment['user_id']);
                 }
                 unset($comment);
-                
-                $post['comments'] = array_reverse($post_comments);
-                $post['user'] = $users[$post['user_id']] ?? null;
+                $post['comments'] = array_reverse($comments);
 
-                if ($post['user'] && $post['user']['del_flg'] == 0) {
+                $post['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $post['user_id']);
+                if ($post['user']['del_flg'] == 0) {
                     $posts[] = $post;
                 }
                 if (count($posts) >= POSTS_PER_PAGE) {
@@ -435,13 +394,7 @@ $app->get('/image/{id}.{ext}', function (Request $request, Response $response, $
         return $response;
     }
 
-    // 必要なカラムのみを取得してパフォーマンス向上
-    $post = $this->get('helper')->fetch_first('SELECT `mime`, `imgdata` FROM `posts` WHERE `id` = ?', $args['id']);
-
-    if (!$post) {
-        $response->getBody()->write('404');
-        return $response->withStatus(404);
-    }
+    $post = $this->get('helper')->fetch_first('SELECT * FROM `posts` WHERE `id` = ?', $args['id']);
 
     if (($args['ext'] == 'jpg' && $post['mime'] == 'image/jpeg') ||
         ($args['ext'] == 'png' && $post['mime'] == 'image/png') ||

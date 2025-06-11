@@ -118,7 +118,11 @@ $container->set('helper', function ($c) {
         }
 
         public function get_session_user() {
-            return $_SESSION['user'] ?? null;
+            if (isset($_SESSION['user'], $_SESSION['user']['id'])) {
+                return $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $_SESSION['user']['id']);
+            } else {
+                return null;
+            }
         }
         
         public function make_posts(array $results, $options = []) {

@@ -708,6 +708,31 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	outputDir := "/home/public/images"
+	// postsの画像はすべて/home/public/imagesに保存する
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		log.Printf("ディレクトリの作成に失敗しました: %v", err)
+		return
+	}
+	ext := ""
+	if mime == "image/jpeg" {
+		ext = ".jpg"
+	} else if mime == "image/png" {
+		ext = ".png"
+	} else if mime == "image/gif" {
+		ext = ".gif"
+	} else {
+		log.Printf("不明なMIMEタイプ: %s", mime)
+		return
+	}
+	filename := fmt.Sprintf("%d%s", result.LastInsertId(), ext)
+	path := path.Join(outputDir, filename)
+	if err := os.WriteFile(path, filedata, 0644); err != nil {
+		log.Printf("画像の書き込みに失敗しました: %v", err)
+		return
+	}
+
+
 	pid, err := result.LastInsertId()
 	if err != nil {
 		log.Print(err)

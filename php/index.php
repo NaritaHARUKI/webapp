@@ -129,34 +129,71 @@ $container->set('helper', function ($c) {
             $options += ['all_comments' => false];
             $all_comments = $options['all_comments'];
 
-            $posts = [];
-            foreach ($results as $post) {
-                $post['comment_count'] = $this->fetch_first('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', $post['id'])['count'];
-                $query = 'SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC';
-                if (!$all_comments) {
-                    $query .= ' LIMIT 3';
-                }
+            if (count($results) === 0) return [];
 
-                $ps = $this->db()->prepare($query);
-                $ps->execute([$post['id']]);
-                $comments = $ps->fetchAll(PDO::FETCH_ASSOC);
-                foreach ($comments as &$comment) {
-                    $comment['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $comment['user_id']);
-                }
-                unset($comment);
-                $post['comments'] = array_reverse($comments);
+            $post_ids = array_column($results, 'id');
+            $user_ids = array_unique(array_column($results, 'user_id'));
 
-                $post['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $post['user_id']);
-                if ($post['user']['del_flg'] == 0) {
-                    $posts[] = $post;
+            // コメント取得
+            $comments = [];
+            if ($all_comments) {
+                $in_clause = implode(',', array_fill(0, count($post_ids), '?'));
+                $stmt = $this->db->prepare("SELECT * FROM comments WHERE post_id IN ({$in_clause}) ORDER BY created_at DESC");
+                $stmt->execute($post_ids);
+                foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $comment) {
+                    $comments[$comment['post_id']][] = $comment;
+                    $user_ids[] = $comment['user_id'];
                 }
-                if (count($posts) >= POSTS_PER_PAGE) {
-                    break;
+            } else {
+                foreach ($post_ids as $pid) {
+                    $stmt = $this->db->prepare("SELECT * FROM comments WHERE post_id = ? ORDER BY created_at DESC LIMIT 3");
+                    $stmt->execute([$pid]);
+                    $comments[$pid] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    foreach ($comments[$pid] as $c) {
+                        $user_ids[] = $c['user_id'];
+                    }
                 }
             }
+
+            // ユーザー一括取得
+            $user_ids = array_unique($user_ids);
+            $in_clause = implode(',', array_fill(0, count($user_ids), '?'));
+            $stmt = $this->db->prepare("SELECT * FROM users WHERE id IN ({$in_clause})");
+            $stmt->execute($user_ids);
+            $users = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $user) {
+                $users[$user['id']] = $user;
+            }
+
+            // コメント数取得
+            $stmt = $this->db->prepare("SELECT post_id, COUNT(*) AS count FROM comments WHERE post_id IN ({$in_clause}) GROUP BY post_id");
+            $stmt->execute($post_ids);
+            $comment_counts = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $comment_counts[$row['post_id']] = $row['count'];
+            }
+
+            // 最終組み立て
+            $posts = [];
+            foreach ($results as $post) {
+                if (!isset($users[$post['user_id']]) || $users[$post['user_id']]['del_flg'] != 0) continue;
+
+                $post['user'] = $users[$post['user_id']];
+                $post['comment_count'] = $comment_counts[$post['id']] ?? 0;
+
+                foreach ($comments[$post['id']] ?? [] as &$comment) {
+                    $comment['user'] = $users[$comment['user_id']] ?? null;
+                }
+                unset($comment);
+
+                $post['comments'] = array_reverse($comments[$post['id']] ?? []);
+
+                $posts[] = $post;
+                if (count($posts) >= POSTS_PER_PAGE) break;
+            }
+
             return $posts;
         }
-
     };
 });
 
